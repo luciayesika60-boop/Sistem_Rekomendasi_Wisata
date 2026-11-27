@@ -1,23 +1,29 @@
 import pandas as pd
 import numpy as np
 
+pd.set_option("display.max_rows", None)
+pd.set_option("display.max_columns", None)
+pd.set_option("display.width", None)
+pd.set_option("display.expand_frame_repr", False)
+
 df = pd.read_csv("archive (7)/DATASET/Dataset_Rating_Mgl.csv")
-
 df_matrix = df.pivot_table(index="User_Id", columns="Place_Name", values="Place_Rating")
+place = df_matrix.columns
 
-user = int(input("Masukkan nama user: "))
-data_user_new = []
+user = int(input("Masukkan ID user: "))
+user_ada = user in df_matrix.index
+
+# Hanya sementara nanti disesuaikan dengan gui!
+tempat_suka = []
 for i in range(2):
-    tempat1 = input("Masukkan nama tempat: ")
-    toRating1 = int(input("Seberapa sering Anda mengunjungi tempat seperti pada gambar tersebut? "))
-    data_user_new.append({"User_Id": user, "Place_Name": tempat1, "Place_Rating": toRating1})
-
-data = pd.concat([df, pd.DataFrame(data_user_new)], ignore_index=True)
-df_matrix_copy = data.pivot_table(index="User_Id", columns="Place_Name", values="Place_Rating")
+    tempat = input("Masukkan nama tempat yang kamu suka: ")
+    if tempat not in place:
+        raise SystemExit("Tempat tidak ada di dataset: " + tempat)
+    tempat_suka.append(tempat)
 
 
-def cosine_similarity(df_matrix_copy, i, j):
-    i_j = df_matrix_copy[[i, j]].dropna()
+def cosine_similarity(df_matrix, i, j):
+    i_j = df_matrix[[i, j]].dropna()
     if i_j.empty:
         return 0.0
 
@@ -31,40 +37,42 @@ def cosine_similarity(df_matrix_copy, i, j):
     if panjang_a == 0 or panjang_b == 0:
         return 0.0
 
-    # similarity JANGAN dibulatkan, biarkan desimal penuh
     return dot_product / (panjang_a * panjang_b)
 
 
-place = df_matrix_copy.columns
-sim = pd.DataFrame(index=place, columns=place, dtype=float)
+K = 5
+hasil_rating = {}
 
-for i in place:
-    for j in place:
-        sim.loc[i, j] = cosine_similarity(df_matrix_copy, i, j)
+for t in tempat_suka:
+    sim_t = pd.Series({j: cosine_similarity(df_matrix, t, j) for j in place if j != t})
+    top5 = sim_t.sort_values(ascending=False).head(K)
+
+    rata2_tempat = df_matrix[top5.index].mean()         
+    if user_ada:
+        rating_user = df_matrix.loc[user, top5.index]    
+    else:
+        rating_user = pd.Series(np.nan, index=top5.index)
+
+    rating_tetangga = rating_user.fillna(rata2_tempat)
+    sumber = np.where(rating_user.notna(), "rating user", "rata-rata tempat")
+
+    valid = rating_tetangga.dropna()
+    sim_valid = top5[valid.index]
+
+    if sim_valid.sum() == 0:
+        print("Rating tidak bisa dihitung (semua kemiripan 0)")
+    else:
+        rating = (sim_valid * valid).sum() / sim_valid.sum()
+        print({round(rating)})
+        hasil_rating[t] = rating
 
 
-def prediksi(df_matrix_copy, sim, user, k=5):
-    rated = df_matrix_copy.loc[user].dropna()
-    hasil = {}
-    for item in df_matrix_copy.columns:
-        if item in rated.index:
-            continue
-        s = sim.loc[item, rated.index].sort_values(ascending=False).head(k)
-        s = s[s > 0]
-        if s.sum() == 0:
-            continue
-        # hanya hasil akhir yang dibulatkan
-        hasil[item] = int(round(np.sum(s.values * rated[s.index].values) / s.sum()))
-    return pd.Series(hasil, dtype=int).sort_values(ascending=False)
+df_matrix_baru = df_matrix.copy()
+if not user_ada:
+    df_matrix_baru.loc[user] = np.nan     
 
+for t, r in hasil_rating.items():
+    df_matrix_baru.loc[user, t] = r
 
-pred = prediksi(df_matrix_copy, sim, user)
-
-# Top 5 akhir dimasukkan ke dataframe baru
-top5_akhir = pred.head(5).to_frame("Prediksi_Rating")
-print(top5_akhir)
-
-# Mengisi kekosongan rating user dengan hasil prediksi
-df_matrix_isi = df_matrix_copy.copy()
-df_matrix_isi.loc[user, pred.index] = pred
-print(df_matrix_isi.loc[user].dropna().round().astype(int))
+print("\nRating user di pivot table:")
+print(df_matrix_baru.loc[[user]].dropna(axis=1))
